@@ -1,114 +1,79 @@
 console.log('[Amazon CloudWatch Notification]');
 
-/*
- configuration for each condition.
- add any conditions here
-*/
-var ALARM_CONFIG = [
-	{
-		condition: "INFO",
-		channel: "#test",
-		mention: " ",
-		color: "#FF9F21",
-		severity: "INFO"
-	},
-	{
-		condition: "CRITICAL",
-		channel: "#general",
-		mention: "<@channel> ",
-		color: "#F35A00",
-		severity: "CRITICAL"
-	}
-];
+/**
+ * Configuration
+ */
+var SLACK_WEBHOOK_URL = 'YOUR_SLACK_URL',
+    CHANNEL = '#aws-monitor',
+    MENTION = '<!channel>',
+    ALARM_COLOR = '#d50200',
+    DISPLAY_NAME = 'AWS CloudWatch',
+    ICON_EMOJI = ':aws:';
 
-var SLACK_CONFIG = {
-	path: "YOUR_PATH",
-};
-
-var http = require ('https');
+var https = require ('https');
 var querystring = require ('querystring');
+
 exports.handler = function(event, context) {
 	console.log(event.Records[0]);
 
-	// parse information
-	var message = event.Records[0].Sns.Message;
-	var subject = event.Records[0].Sns.Subject;
-	var timestamp = event.Records[0].Sns.Timestamp;
+	// Parse SNS Event information
+	var message = JSON.parse(event.Records[0].Sns.Message);
 
-	// vars for final message
-	var channel;
-	var severity;
-	var color;
-
-	// create post message
-	var alarmMessage = " *[Amazon CloudWatch Notification]* \n"+
-	"Subject: "+subject+"\n"+
-	"Message: "+message+"\n"+
-	"Timestamp: "+timestamp;
-
-	// check subject for condition
-	for (var i=0; i < ALARM_CONFIG.length; i++) {
-		var row = ALARM_CONFIG[i];
-		console.log(row);
-		if (subject.match(row.condition)) {
-			console.log("Matched condition: "+row.condition);
-
-			alarmMessage = row.mention+" "+alarmMessage+" ";
-			channel = row.channel;
-			severity = row.severity;
-			color = row.color;
-			break;
-		}
-	}
-
-	if (!channel) {
-		console.log("Could not find condition.");
-		context.done('error', "Invalid condition");
-	}
-
-	var payloadStr = JSON.stringify({
-	"attachments": [
-		{
-			"fallback": alarmMessage,
-			"text": alarmMessage,
-			"mrkdwn_in": ["text"],
-			"username": "AWS-CloudWatch-Lambda-bot",
-			"fields": [
-				{
-					"title": "Severity",
-					"value": severity,
-					"short": true
-				}
-			],
-			"color": color
-		}
-	],
-		"channel":channel
+	var postData = JSON.stringify({
+        "icon_emoji": ICON_EMOJI,
+        "username": DISPLAY_NAME,
+        "attachments": [
+            {
+                "fallback": message.AlarmName,
+                "mrkdwn_in": ["text"],
+                "pretext": MENTION,
+                "title": `Alarm: ${message.AlarmName}`,
+                "text": `${message.Trigger.MetricName} - ${message.NewStateReason}`,
+                "title_link": createCloudWatchUrl(message.AlarmName),
+                "color": ALARM_COLOR,
+                "channel": CHANNEL,
+                "ts": getUnixTime(message.StateChangeTime)
+            }
+        ]
 	});
-	var postData = querystring.stringify({
-	  "payload": payloadStr
-	});
+
 	console.log(postData);
+
 	var options = {
 		hostname: "hooks.slack.com",
-		port: 443,
-		path: SLACK_CONFIG.path,
+		path: SLACK_WEBHOOK_URL,
 		method: 'POST',
 		headers: {
-			'Content-Type': 'application/x-www-form-urlencoded',
+			'Content-Type': 'application/json',
 			'Content-Length': postData.length
 		}
 	};
 
-	var req = http.request(options, function(res) {
-		console.log("Got response: " + res.statusCode);
-		res.on("data", function(chunk) {
+	var req = https.request(options, function(res) {
+		console.log('Got response: ' + res.statusCode);
+		res.on('data', function(chunk) {
 			console.log('BODY: '+chunk);
 			context.done(null, 'done!');
 		});
 	}).on('error', function(e) {
 		context.done('error', e);
 	});
+
 	req.write(postData);
 	req.end();
 };
+
+/**
+ * Gets the Unix time from a date object
+ */
+function getUnixTime(date) {
+    // getTime() return time since Epoch in ms and needs to be converted to seconds
+    return new Date(date).getTime() / 1000;
+}
+
+/**
+ * Creates a URL to the Alarm
+ */
+function createCloudWatchUrl(alarmName) {
+    return `https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#alarm:alarmFilter=inAlarm;name=${alarmName}`
+}
